@@ -3,13 +3,14 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "build": "tsc && sed -i '1i#!/usr/bin/env node' mini-ci.js",
+    "build": "tsc && sed -i '1i#!/usr/bin/env node' *.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "",
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@octokit/graphql": "^9.0.1",
     "simple-git": "^3.27.0",
     "ts-node": "^10.9.2",
     "typescript": "^5.8.3"

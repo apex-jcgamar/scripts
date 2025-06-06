@@ -38,6 +38,7 @@ coverage/
 
 # Project specific
 mini-ci-db.json
+secrets.json
 
 # VS Code Extension files
 *.vsix
