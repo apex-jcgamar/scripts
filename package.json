@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "build": "tsc && sed -i '1i#!/usr/bin/env node' *.js",
+    "build:chmod": "chmod +x ./bin/check-team-prs.js ./bin/mini-ci.js",
+    "build": "rm -rf bin && tsc && sed -i '1i#!/usr/bin/env node' bin/*.js && npm run build:chmod",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "",
