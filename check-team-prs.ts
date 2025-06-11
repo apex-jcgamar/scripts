@@ -33,6 +33,7 @@ const fetchPullRequests = async (nextPagePointer: string | null) => {
               createdAt
               url
               isDraft
+              headRefName
               author {
                 resourcePath
                 login
@@ -62,9 +63,10 @@ const main = async () => {
     nextPage = response.repository.pullRequests.pageInfo.endCursor;
 
     const prs = response.repository.pullRequests.nodes
-      .map(({ author, url, isDraft, createdAt }) => ({
+      .map(({ author, url, isDraft, createdAt, headRefName }) => ({
         author: author.login,
         url,
+        branch: headRefName,
         isDraft,
         createdAt,
       }))

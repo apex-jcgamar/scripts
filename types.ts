@@ -22,6 +22,7 @@ export interface PullRequestNode {
   isDraft: boolean;
   createdAt: string;
   url: string;
+  headRefName: string;
   comments: CommentConnection;
   reviews: ReviewConnection;
   suggestedReviewers: ReviewerConnection;
