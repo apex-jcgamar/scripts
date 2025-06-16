@@ -8,7 +8,47 @@ const watchedAuthors = [
   "timp-apex",
   "gmarin3",
   "apex-jcgamar",
+  "tim-isakzhanov",
 ];
+
+const formatDate = (dateStr: string): string => {
+  const date = new Date(dateStr);
+  const now = new Date();
+  const diffDays = Math.floor(
+    (now.getTime() - date.getTime()) / (1000 * 60 * 60 * 24)
+  );
+
+  if (diffDays < 7) {
+    const days = [
+      "Sunday",
+      "Monday",
+      "Tuesday",
+      "Wednesday",
+      "Thursday",
+      "Friday",
+      "Saturday",
+    ];
+    return days[date.getDay()];
+  }
+
+  const months = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+  ];
+  return `${date.getDate().toString().padStart(2, "0")}-${
+    months[date.getMonth()]
+  }`;
+};
 
 const fetchPullRequests = async (nextPagePointer: string | null) => {
   return await graphql<GetPullRequestsResponse>(
@@ -68,7 +108,7 @@ const main = async () => {
         url,
         branch: headRefName,
         isDraft,
-        createdAt,
+        createdAt: formatDate(createdAt),
       }))
       .filter(({ author }) => watchedAuthors.includes(author))
       .forEach((pr) => {
