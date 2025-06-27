@@ -23,34 +23,34 @@ export interface PullRequestNode {
   createdAt: string;
   url: string;
   headRefName: string;
-  comments: CommentConnection;
-  reviews: ReviewConnection;
-  suggestedReviewers: ReviewerConnection;
   author: User;
+  commits: CommitConnection;
+  reviews: ReviewConnection;
 }
 
-export interface CommentConnection {
-  nodes: CommentNode[];
+export interface CommitConnection {
+  nodes: CommitNode[];
 }
 
-export interface CommentNode {
-  author: Author;
-}
-
-export interface Author {
-  resourcePath: string;
+export interface CommitNode {
+  commit: {
+    statusCheckRollup: {
+      state: "SUCCESS" | "FAILURE" | "PENDING" | "NEUTRAL" | "UNKNOWN";
+    } | null;
+  };
 }
 
 export interface ReviewConnection {
-  totalCount: number;
+  nodes: ReviewNode[];
 }
 
-export interface ReviewerConnection {
-  reviewer: Reviewer;
-}
-
-export interface Reviewer {
-  name: string;
+export interface ReviewNode {
+  state:
+    | "APPROVED"
+    | "CHANGES_REQUESTED"
+    | "COMMENTED"
+    | "DISMISSED"
+    | "PENDING";
 }
 
 export interface User {

@@ -1,13 +1,13 @@
 import { graphql } from "@octokit/graphql";
 import { githubAccessToken } from "./secrets.json";
-import { GetPullRequestsResponse } from "./types";
+import chalk from "chalk";
 
 // Configuration
 const CONFIG = {
-  pageSize: 30 as const,
+  pageSize: 10 as const,
   repository: {
     owner: "apex-fintech-solutions",
-    name: "source"
+    name: "source",
   },
   watchedAuthors: [
     "JeronimoUlloa",
@@ -15,7 +15,27 @@ const CONFIG = {
     "gmarin3",
     "apex-jcgamar",
     "tim-isakzhanov",
-  ]
+  ],
+  style: {
+    author: chalk.cyan.bold,
+    draft: chalk.yellow,
+    date: chalk.gray,
+    branch: chalk.green,
+    url: chalk.blue.underline,
+    count: chalk.magenta.bold,
+    queue: chalk.yellow("🔀"),
+    status: {
+      success: chalk.green("✓"),
+      failure: chalk.red("✗"),
+      pending: chalk.yellow("○"),
+      neutral: chalk.gray("○"),
+      unknown: chalk.gray("?"),
+    },
+    reviews: {
+      approved: "👍",
+      changesRequested: "👎",
+    },
+  },
 };
 
 // Types
@@ -25,6 +45,59 @@ interface PullRequest {
   branch: string;
   isDraft: boolean;
   createdAt: string;
+  status: "SUCCESS" | "FAILURE" | "PENDING" | "NEUTRAL" | "UNKNOWN";
+  reviewStatus: {
+    approved: number;
+    changesRequested: boolean;
+  };
+  inQueue: boolean;
+}
+
+interface Review {
+  state: string;
+}
+
+interface Commit {
+  commit: {
+    statusCheckRollup: {
+      state: string;
+    } | null;
+  } | null;
+}
+
+interface PullRequestNode {
+  id: string;
+  createdAt: string;
+  url: string;
+  isDraft: boolean;
+  headRefName: string;
+  author: {
+    resourcePath: string;
+    login: string;
+  };
+  commits: {
+    nodes: Commit[];
+  };
+  reviews: {
+    nodes: Review[];
+  };
+  labels: {
+    nodes: {
+      name: string;
+    }[];
+  };
+}
+
+interface SearchResponse {
+  search: {
+    pageInfo: {
+      startCursor: string;
+      endCursor: string;
+      hasNextPage: boolean;
+      hasPreviousPage: boolean;
+    };
+    nodes: (PullRequestNode | null)[];
+  };
 }
 
 // Date formatting utilities
@@ -34,6 +107,11 @@ const formatDate = (dateStr: string): string => {
   const diffDays = Math.floor(
     (now.getTime() - date.getTime()) / (1000 * 60 * 60 * 24)
   );
+
+  // Check if the date is today
+  if (date.toDateString() === now.toDateString()) {
+    return "today";
+  }
 
   if (diffDays < 7) {
     const days = [
@@ -45,7 +123,9 @@ const formatDate = (dateStr: string): string => {
       "Friday",
       "Saturday",
     ];
-    return days[date.getDay()];
+    return `${days[date.getDay()]} (${diffDays + 1} ${
+      diffDays === 1 ? "day" : "days"
+    } ago)`;
   }
 
   const months = [
@@ -68,25 +148,28 @@ const formatDate = (dateStr: string): string => {
 };
 
 const fetchPullRequests = async (nextPagePointer: string | null) => {
+  const authorFilters = CONFIG.watchedAuthors
+    .map((author) => `author:${author}`)
+    .join(" ");
+
   try {
-    return await graphql<GetPullRequestsResponse>(
+    return await graphql<SearchResponse>(
       `
-        query ($owner: String!, $name: String!, $pageSize: Int!, $after: String) {
-          repository(owner: $owner, name: $name) {
-            pullRequests(
-              first: $pageSize
-              states: [OPEN]
-              after: $after
-              orderBy: { field: CREATED_AT, direction: DESC }
-            ) {
-              totalCount
-              pageInfo {
-                startCursor
-                endCursor
-                hasNextPage
-                hasPreviousPage
-              }
-              nodes {
+        query ($pageSize: Int!, $after: String, $searchQuery: String!) {
+          search(
+            query: $searchQuery
+            type: ISSUE
+            first: $pageSize
+            after: $after
+          ) {
+            pageInfo {
+              startCursor
+              endCursor
+              hasNextPage
+              hasPreviousPage
+            }
+            nodes {
+              ... on PullRequest {
                 id
                 createdAt
                 url
@@ -96,73 +179,125 @@ const fetchPullRequests = async (nextPagePointer: string | null) => {
                   resourcePath
                   login
                 }
+                commits(last: 1) {
+                  nodes {
+                    commit {
+                      statusCheckRollup {
+                        state
+                      }
+                    }
+                  }
+                }
+                reviews(last: 100, states: [APPROVED, CHANGES_REQUESTED]) {
+                  nodes {
+                    state
+                  }
+                }
+                labels(first: 100) {
+                  nodes {
+                    name
+                  }
+                }
               }
             }
           }
         }
       `,
       {
-        owner: CONFIG.repository.owner,
-        name: CONFIG.repository.name,
         pageSize: CONFIG.pageSize,
         after: nextPagePointer,
+        searchQuery: `repo:${CONFIG.repository.owner}/${CONFIG.repository.name} is:pr is:open ${authorFilters}`,
         headers: { authorization: `Bearer ${githubAccessToken}` },
       }
     );
   } catch (error) {
-    console.error("Error fetching pull requests:", error instanceof Error ? error.message : String(error));
+    console.error(
+      "Error fetching pull requests:",
+      error instanceof Error ? error.message : String(error)
+    );
     throw error;
   }
 };
 
-const formatPullRequest = (pr: PullRequest): string => {
-  const draftTag = pr.isDraft ? "[DRAFT] " : "";
-  return `${draftTag}${pr.author} - ${pr.branch} (${pr.createdAt})\n${pr.url}\n`;
+const transformPullRequest = (node: PullRequestNode): PullRequest => {
+  const status =
+    node.commits.nodes[0]?.commit?.statusCheckRollup?.state ?? "UNKNOWN";
+  const reviews = node.reviews.nodes;
+  const reviewStatus = {
+    approved: reviews.filter((r) => r.state === "APPROVED").length,
+    changesRequested: reviews.some((r) => r.state === "CHANGES_REQUESTED"),
+  };
+  return {
+    author: node.author.login,
+    url: node.url,
+    branch: node.headRefName,
+    isDraft: node.isDraft,
+    createdAt: node.createdAt,
+    status: status as PullRequest["status"],
+    reviewStatus,
+    inQueue: node.labels.nodes.some((label) => label.name === "queue"),
+  };
 };
+
+const isPullRequestNode = (node: unknown): node is PullRequestNode =>
+  node !== null &&
+  node !== undefined &&
+  typeof node === "object" &&
+  "author" in node;
 
 const main = async () => {
   try {
-    let hasNextPage = false;
-    let nextPage: string | null = null;
-    let pageCount = 1;
-    const allPRs: PullRequest[] = [];
+    const response = await fetchPullRequests(null);
+    console.log("Fetching pull requests...");
 
-    do {
-      const response = await fetchPullRequests(nextPage);
-      hasNextPage = response.repository.pullRequests.pageInfo.hasNextPage;
-      nextPage = response.repository.pullRequests.pageInfo.endCursor;
+    const prs = response.search.nodes
+      .filter(isPullRequestNode)
+      .map(transformPullRequest);
 
-      console.log(`Fetching page ${pageCount}...`);
-
-      const prs = response.repository.pullRequests.nodes
-        .map(({ author, url, isDraft, createdAt, headRefName }): PullRequest => ({
-          author: author.login,
-          url,
-          branch: headRefName,
-          isDraft,
-          createdAt: formatDate(createdAt),
-        }))
-        .filter(({ author }) => CONFIG.watchedAuthors.includes(author));
-
-      allPRs.push(...prs);
-      pageCount++;
-    } while (hasNextPage);
-
-    if (allPRs.length === 0) {
+    if (prs.length === 0) {
       console.log("No open pull requests found for the watched authors.");
       return;
     }
 
     console.log("\nOpen Pull Requests:\n");
-    allPRs.forEach((pr) => {
+    prs.forEach((pr) => {
       console.log(formatPullRequest(pr));
     });
-    console.log(`Total PRs found: ${allPRs.length}`);
-
+    console.log(`Total PRs found: ${CONFIG.style.count(prs.length)}`);
   } catch (error) {
-    console.error("An error occurred while running the script:", error instanceof Error ? error.message : String(error));
+    console.error(
+      "An error occurred while running the script:",
+      error instanceof Error ? error.message : String(error)
+    );
     process.exit(1);
   }
 };
 
 main();
+
+const formatPullRequest = (pr: PullRequest): string => {
+  const draftTag = pr.isDraft ? CONFIG.style.draft("[DRAFT] ") : "";
+  const statusIcon =
+    CONFIG.style.status[
+      pr.status.toLowerCase() as keyof typeof CONFIG.style.status
+    ];
+  const reviewIcons = [
+    pr.reviewStatus.approved > 0
+      ? `${CONFIG.style.reviews.approved} ${pr.reviewStatus.approved}`
+      : "",
+    pr.reviewStatus.changesRequested
+      ? CONFIG.style.reviews.changesRequested
+      : "",
+    pr.inQueue ? CONFIG.style.queue : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  return `${statusIcon} ${draftTag}${CONFIG.style.author(
+    pr.author
+  )} - ${CONFIG.style.branch(
+    pr.branch
+  )} ${reviewIcons}\n   (${CONFIG.style.date(
+    pr.createdAt
+  )})\n   ${CONFIG.style.url(pr.url)}\n`;
+};

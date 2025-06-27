@@ -12,6 +12,7 @@
   "description": "",
   "dependencies": {
     "@octokit/graphql": "^9.0.1",
+    "chalk": "^5.4.1",
     "simple-git": "^3.27.0",
     "ts-node": "^10.9.2",
     "typescript": "^5.8.3"
