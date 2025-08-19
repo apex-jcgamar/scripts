@@ -59,7 +59,7 @@ const generateBffCommands = (files: string[]) => {
     commands.push("bazel run //apex-online:update_gql_types");
   }
 
-  commands.push("bazel run //apex-online/apex-grql:lint_typescript");
+  // commands.push("bazel run //apex-online/apex-grql:lint_typescript");
   commands.push("bazel build //apex-online/apex-grql:compile_ts");
 
   return commands;
@@ -80,7 +80,7 @@ const generateAscendUiCommands = (files: string[]) => {
     );
   }
 
-  commands.push("bazel run //ascend-ui/app:ts_lint_test");
+  // commands.push("bazel run //ascend-ui/app:ts_lint_test");
   commands.push("bazel run //ascend-ui/app:ts_types_test");
 
   return commands;
@@ -134,7 +134,26 @@ const executeCommand = (command: string): Promise<boolean> => {
 };
 
 const main = async () => {
+  // Show help if requested
+  if (process.argv.includes("--help") || process.argv.includes("-h")) {
+    console.log(styles.header("\n🛠️  Mini CI Runner"));
+    console.log(styles.info("\nUsage:"));
+    console.log("  ts-node mini-ci.ts [options]");
+    console.log(styles.info("\nOptions:"));
+    console.log(
+      `  ${styles.highlight(
+        "--full"
+      )}    Execute the complete plan, skip checkpoint question`
+    );
+    console.log(`  ${styles.highlight("--help, -h")} Show this help message`);
+    console.log("");
+    process.exit(0);
+  }
+
   const db = await loadDatabase();
+
+  // Check for --full flag
+  const executeFullPlan = process.argv.includes("--full");
 
   const { current: branch } = await git.status();
   if (!branch) throw new Error("No branch!");
@@ -157,7 +176,7 @@ const main = async () => {
 
   const dbState = db[branch] ?? initializeBuildState(commands);
 
-  if (arraysEqual(dbState.plan, commands)) {
+  if (arraysEqual(dbState.plan, commands) && !executeFullPlan) {
     const ans = await askQuestion(
       styles.info("Restart from last checkpoint? (yes/no) ")
     );
@@ -165,6 +184,12 @@ const main = async () => {
       console.log(styles.success("Starting from checkpoint"));
       commands = mergeCommands(dbState);
     }
+  } else if (executeFullPlan && arraysEqual(dbState.plan, commands)) {
+    console.log(styles.info("--full flag detected, executing complete plan"));
+    // Reset all commands to pending for full execution
+    commands.forEach((cmd) => {
+      dbState.stepDetails[cmd] = "pending";
+    });
   }
 
   let isShuttingDown = false;

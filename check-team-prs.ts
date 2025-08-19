@@ -1,6 +1,7 @@
 import { graphql } from "@octokit/graphql";
 import { githubAccessToken } from "./secrets.json";
 import chalk from "chalk";
+import simpleGit from "simple-git";
 
 // Configuration
 const CONFIG = {
@@ -9,12 +10,16 @@ const CONFIG = {
     owner: "apex-fintech-solutions",
     name: "source",
   },
+  paths: {
+    baseDir: "/home/jgama/workspace/source",
+  },
   watchedAuthors: [
+    "apex-jcgamar",
     "JeronimoUlloa",
     "timp-apex",
     "gmarin3",
-    "apex-jcgamar",
     "tim-isakzhanov",
+    "amy-moore-apex",
   ],
   style: {
     author: chalk.cyan.bold,
@@ -24,6 +29,7 @@ const CONFIG = {
     url: chalk.blue.underline,
     count: chalk.magenta.bold,
     queue: chalk.yellow("🔀"),
+    currentBranch: "📌",
     status: {
       success: chalk.green("✓"),
       failure: chalk.red("✗"),
@@ -38,6 +44,8 @@ const CONFIG = {
   },
 };
 
+const git = simpleGit({ baseDir: CONFIG.paths.baseDir });
+
 // Types
 interface PullRequest {
   author: string;
@@ -51,6 +59,7 @@ interface PullRequest {
     changesRequested: boolean;
   };
   inQueue: boolean;
+  mandatoryReviewers: { name: string; type: "User" | "Team" }[];
 }
 
 interface Review {
@@ -86,6 +95,14 @@ interface PullRequestNode {
       name: string;
     }[];
   };
+  reviewRequests: {
+    nodes: {
+      requestedReviewer:
+        | { __typename: "User"; login: string }
+        | { __typename: "Team"; name: string }
+        | null;
+    }[];
+  };
 }
 
 interface SearchResponse {
@@ -108,43 +125,25 @@ const formatDate = (dateStr: string): string => {
     (now.getTime() - date.getTime()) / (1000 * 60 * 60 * 24)
   );
 
+  const days = [
+    "Sunday",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+  ];
+
   // Check if the date is today
   if (date.toDateString() === now.toDateString()) {
-    return "today";
+    return `${days[date.getDay()]} (today)`;
   }
 
-  if (diffDays < 7) {
-    const days = [
-      "Sunday",
-      "Monday",
-      "Tuesday",
-      "Wednesday",
-      "Thursday",
-      "Friday",
-      "Saturday",
-    ];
-    return `${days[date.getDay()]} (${diffDays + 1} ${
-      diffDays === 1 ? "day" : "days"
-    } ago)`;
-  }
-
-  const months = [
-    "Jan",
-    "Feb",
-    "Mar",
-    "Apr",
-    "May",
-    "Jun",
-    "Jul",
-    "Aug",
-    "Sep",
-    "Oct",
-    "Nov",
-    "Dec",
-  ];
-  return `${date.getDate().toString().padStart(2, "0")}-${
-    months[date.getMonth()]
-  }`;
+  // Show day of week and days ago
+  return `${days[date.getDay()]} (${diffDays} ${
+    diffDays === 1 ? "day" : "days"
+  } ago)`;
 };
 
 const fetchPullRequests = async (nextPagePointer: string | null) => {
@@ -198,6 +197,19 @@ const fetchPullRequests = async (nextPagePointer: string | null) => {
                     name
                   }
                 }
+                reviewRequests(first: 10) {
+                  nodes {
+                    requestedReviewer {
+                      __typename
+                      ... on User {
+                        login
+                      }
+                      ... on Team {
+                        name
+                      }
+                    }
+                  }
+                }
               }
             }
           }
@@ -227,6 +239,16 @@ const transformPullRequest = (node: PullRequestNode): PullRequest => {
     approved: reviews.filter((r) => r.state === "APPROVED").length,
     changesRequested: reviews.some((r) => r.state === "CHANGES_REQUESTED"),
   };
+  const mandatoryReviewers = node.reviewRequests.nodes
+    .map((req) => {
+      if (!req.requestedReviewer) return null;
+      if (req.requestedReviewer.__typename === "User")
+        return { name: req.requestedReviewer.login, type: "User" };
+      if (req.requestedReviewer.__typename === "Team")
+        return { name: req.requestedReviewer.name, type: "Team" };
+      return null;
+    })
+    .filter((r): r is { name: string; type: "User" | "Team" } => !!r);
   return {
     author: node.author.login,
     url: node.url,
@@ -236,6 +258,7 @@ const transformPullRequest = (node: PullRequestNode): PullRequest => {
     status: status as PullRequest["status"],
     reviewStatus,
     inQueue: node.labels.nodes.some((label) => label.name === "queue"),
+    mandatoryReviewers,
   };
 };
 
@@ -250,6 +273,15 @@ const main = async () => {
     const response = await fetchPullRequests(null);
     console.log("Fetching pull requests...");
 
+    // Get current branch
+    let currentBranch: string | null = null;
+    try {
+      const status = await git.status();
+      currentBranch = status.current || null;
+    } catch (error) {
+      console.warn("Could not determine current git branch");
+    }
+
     const prs = response.search.nodes
       .filter(isPullRequestNode)
       .map(transformPullRequest);
@@ -259,10 +291,31 @@ const main = async () => {
       return;
     }
 
+    // Group PRs by author
+    const prsByAuthor = prs.reduce((groups, pr) => {
+      if (!groups[pr.author]) {
+        groups[pr.author] = [];
+      }
+      groups[pr.author].push(pr);
+      return groups;
+    }, {} as Record<string, PullRequest[]>);
+
     console.log("\nOpen Pull Requests:\n");
-    prs.forEach((pr) => {
-      console.log(formatPullRequest(pr));
+
+    // Display grouped PRs
+    Object.entries(prsByAuthor).forEach(([author, authorPrs]) => {
+      console.log(
+        CONFIG.style.author(
+          `${author} (${authorPrs.length} PR${authorPrs.length > 1 ? "s" : ""})`
+        )
+      );
+      console.log("─".repeat(50));
+
+      authorPrs.forEach((pr) => {
+        console.log(formatPullRequest(pr, currentBranch));
+      });
     });
+
     console.log(`Total PRs found: ${CONFIG.style.count(prs.length)}`);
   } catch (error) {
     console.error(
@@ -275,13 +328,22 @@ const main = async () => {
 
 main();
 
-const formatPullRequest = (pr: PullRequest): string => {
+const formatPullRequest = (
+  pr: PullRequest,
+  currentBranch: string | null = null
+): string => {
   const draftTag = pr.isDraft ? CONFIG.style.draft("[DRAFT] ") : "";
   const statusIcon =
     CONFIG.style.status[
       pr.status.toLowerCase() as keyof typeof CONFIG.style.status
     ];
-  const reviewIcons = [
+
+  // Collect all icons for the right side
+  const icons = [
+    pr.author === "apex-jcgamar" ? "⭐" : "",
+    currentBranch && pr.branch === currentBranch
+      ? CONFIG.style.currentBranch
+      : "",
     pr.reviewStatus.approved > 0
       ? `${CONFIG.style.reviews.approved} ${pr.reviewStatus.approved}`
       : "",
@@ -293,11 +355,32 @@ const formatPullRequest = (pr: PullRequest): string => {
     .filter(Boolean)
     .join(" ");
 
-  return `${statusIcon} ${draftTag}${CONFIG.style.author(
-    pr.author
-  )} - ${CONFIG.style.branch(
+  const iconsSection = icons ? ` ${icons}` : "";
+
+  // Print px-frontend-c, core-services, or watchedAuthors in red
+  const reviewersSection =
+    pr.mandatoryReviewers.length > 0
+      ? "\t" +
+        pr.mandatoryReviewers
+          .map((r) => {
+            if (
+              [
+                ...CONFIG.watchedAuthors,
+                "px-frontend-c",
+                "core-services",
+              ].includes(r.name)
+            ) {
+              return chalk.red(r.name);
+            }
+            return r.name;
+          })
+          .join(", ") +
+        "\n"
+      : "";
+
+  return `${statusIcon} ${draftTag}${CONFIG.style.branch(
     pr.branch
-  )} ${reviewIcons}\n   (${CONFIG.style.date(
-    pr.createdAt
-  )})\n   ${CONFIG.style.url(pr.url)}\n`;
+  )}${iconsSection}\n   (${CONFIG.style.date(
+    formatDate(pr.createdAt)
+  )})\n   ${CONFIG.style.url(pr.url)}\n${reviewersSection}`;
 };
